@@ -13,14 +13,33 @@ from utils import setup_seed
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--batch_size', type=int, default=4096)
-    parser.add_argument('--max_device_batch_size', type=int, default=512)
-    parser.add_argument('--base_learning_rate', type=float, default=1.5e-4)
+    parser.add_argument('--batch_size', type=int, default=512)
+    parser.add_argument('--max_device_batch_size', type=int, default=256)
+    parser.add_argument('--base_learning_rate', type=float, default=1e-4)
     parser.add_argument('--weight_decay', type=float, default=0.05)
-    parser.add_argument('--mask_ratio', type=float, default=0.75)
-    parser.add_argument('--total_epoch', type=int, default=2000)
-    parser.add_argument('--warmup_epoch', type=int, default=200)
+    parser.add_argument('--total_epoch', type=int, default=1001)
+    parser.add_argument('--warmup_epoch', type=int, default=40)
     parser.add_argument('--model_path', type=str, default='vit-t-mae.pt')
+    parser.add_argument('--gpu', type=str, default='1')
+
+    parser.add_argument('--train_root', type=str, default='/home/aau3090/Datasets/celeba/train')
+    parser.add_argument('--val_root', type=str, default='/home/aau3090/Datasets/celeba/val')
+    #parser.add_argument('--train_root', type=str, default='/home/aau3090/Datasets/nozzle_dataset/spray_frames/generative/train')
+    #parser.add_argument('--val_root', type=str, default='/home/aau3090/Datasets/nozzle_dataset/spray_frames/generative/val_sample')
+    parser.add_argument('--folders', type=list, default=[])
+    parser.add_argument('--n_workers', type=int, default=6)
+
+    # model
+    parser.add_argument('--image_size', type=int, default=192)
+    parser.add_argument('--in_channel', type=int, default=3)
+    parser.add_argument('--patch_size', type=int, default=16)
+    parser.add_argument('--encoder_emb_dim', type=int, default=192)
+    parser.add_argument('--encoder_layer', type=int, default=12)
+    parser.add_argument('--encoder_head', type=int, default=4)
+    parser.add_argument('--decoder_emb_dim', type=int, default=512)
+    parser.add_argument('--decoder_layer', type=int, default=8)
+    parser.add_argument('--decoder_head', type=int, default=16)
+    parser.add_argument('--mask_ratio', type=float, default=0.75)
 
     args = parser.parse_args()
 
@@ -32,13 +51,32 @@ if __name__ == '__main__':
     assert batch_size % load_batch_size == 0
     steps_per_update = batch_size // load_batch_size
 
-    train_dataset = torchvision.datasets.CIFAR10('data', train=True, download=True, transform=Compose([ToTensor(), Normalize(0.5, 0.5)]))
-    val_dataset = torchvision.datasets.CIFAR10('data', train=False, download=True, transform=Compose([ToTensor(), Normalize(0.5, 0.5)]))
-    dataloader = torch.utils.data.DataLoader(train_dataset, load_batch_size, shuffle=True, num_workers=4)
-    writer = SummaryWriter(os.path.join('logs', 'cifar10', 'mae-pretrain'))
+    #train_dataset = torchvision.datasets.CIFAR10('data', train=True, download=True, transform=Compose([ToTensor(), Normalize(0.5, 0.5)]))
+    #val_dataset = torchvision.datasets.CIFAR10('data', train=False, download=True, transform=Compose([ToTensor(), Normalize(0.5, 0.5)]))
+
+    from dataset import ImageFolderDataset
+    from transforms import train_transforms
+    trainset = ImageFolderDataset(args.train_root, args.folders, train_transforms(frame_size=178, crop_size=args.image_size, mean=0.5, std=0.5, norm=True))
+    valset = ImageFolderDataset(args.val_root, args.folders, train_transforms(frame_size=178, crop_size=args.image_size, mean=0.5, std=0.5, norm=True))
+    #trainset = ImageFolderDataset(args.train_root, args.folders, train_transforms(frame_size=484, crop_size=args.image_size))
+    #valset = ImageFolderDataset(args.val_root, args.folders, train_transforms(frame_size=484, crop_size=args.image_size))
+    from torch.utils.data import DataLoader
+    train_dataloader = DataLoader(trainset, batch_size=args.batch_size, shuffle=True, pin_memory=True, num_workers=args.n_workers)
+    #val_dataloader = DataLoader(valset, batch_size=args.batch_size, shuffle=True, pin_memory=True, num_workers=args.n_workers)
+
+    writer = SummaryWriter(os.path.join('logs', 'face', 'mae-pretrain'))
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    model = MAE_ViT(mask_ratio=args.mask_ratio).to(device)
+    model = MAE_ViT(image_size=args.image_size,
+                    in_channel=args.in_channel,
+                    patch_size=args.patch_size,
+                    emb_dim=args.encoder_emb_dim,
+                    encoder_layer=args.encoder_layer,
+                    encoder_head=args.encoder_head,
+                    decoder_layer=args.decoder_layer,
+                    decoder_head=args.decoder_head,
+                    mask_ratio=args.mask_ratio).to(device)
+
     optim = torch.optim.AdamW(model.parameters(), lr=args.base_learning_rate * args.batch_size / 256, betas=(0.9, 0.95), weight_decay=args.weight_decay)
     lr_func = lambda epoch: min((epoch + 1) / (args.warmup_epoch + 1e-8), 0.5 * (math.cos(epoch / args.total_epoch * math.pi) + 1))
     lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optim, lr_lambda=lr_func, verbose=True)
@@ -48,7 +86,7 @@ if __name__ == '__main__':
     for e in range(args.total_epoch):
         model.train()
         losses = []
-        for img, label in tqdm(iter(dataloader)):
+        for img, label in tqdm(iter(train_dataloader)):
             step_count += 1
             img = img.to(device)
             predicted_img, mask = model(img)
@@ -66,7 +104,7 @@ if __name__ == '__main__':
         ''' visualize the first 16 predicted images on val dataset'''
         model.eval()
         with torch.no_grad():
-            val_img = torch.stack([val_dataset[i][0] for i in range(16)])
+            val_img = torch.stack([valset[i][0] for i in range(16)])
             val_img = val_img.to(device)
             predicted_val_img, mask = model(val_img)
             predicted_val_img = predicted_val_img * mask + val_img * (1 - mask)

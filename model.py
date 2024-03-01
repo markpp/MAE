@@ -38,6 +38,7 @@ class PatchShuffle(torch.nn.Module):
 class MAE_Encoder(torch.nn.Module):
     def __init__(self,
                  image_size=32,
+                 in_channel=3,
                  patch_size=2,
                  emb_dim=192,
                  num_layer=12,
@@ -50,7 +51,7 @@ class MAE_Encoder(torch.nn.Module):
         self.pos_embedding = torch.nn.Parameter(torch.zeros((image_size // patch_size) ** 2, 1, emb_dim))
         self.shuffle = PatchShuffle(mask_ratio)
 
-        self.patchify = torch.nn.Conv2d(3, emb_dim, patch_size, patch_size)
+        self.patchify = torch.nn.Conv2d(in_channel, emb_dim, patch_size, patch_size)
 
         self.transformer = torch.nn.Sequential(*[Block(emb_dim, num_head) for _ in range(num_layer)])
 
@@ -79,6 +80,7 @@ class MAE_Encoder(torch.nn.Module):
 class MAE_Decoder(torch.nn.Module):
     def __init__(self,
                  image_size=32,
+                 in_channel=3,
                  patch_size=2,
                  emb_dim=192,
                  num_layer=4,
@@ -91,7 +93,7 @@ class MAE_Decoder(torch.nn.Module):
 
         self.transformer = torch.nn.Sequential(*[Block(emb_dim, num_head) for _ in range(num_layer)])
 
-        self.head = torch.nn.Linear(emb_dim, 3 * patch_size ** 2)
+        self.head = torch.nn.Linear(emb_dim, in_channel * patch_size ** 2)
         self.patch2img = Rearrange('(h w) b (c p1 p2) -> b c (h p1) (w p2)', p1=patch_size, p2=patch_size, h=image_size//patch_size)
 
         self.init_weight()
@@ -124,6 +126,7 @@ class MAE_Decoder(torch.nn.Module):
 class MAE_ViT(torch.nn.Module):
     def __init__(self,
                  image_size=32,
+                 in_channel=3,
                  patch_size=2,
                  emb_dim=192,
                  encoder_layer=12,
@@ -134,8 +137,8 @@ class MAE_ViT(torch.nn.Module):
                  ) -> None:
         super().__init__()
 
-        self.encoder = MAE_Encoder(image_size, patch_size, emb_dim, encoder_layer, encoder_head, mask_ratio)
-        self.decoder = MAE_Decoder(image_size, patch_size, emb_dim, decoder_layer, decoder_head)
+        self.encoder = MAE_Encoder(image_size, in_channel, patch_size, emb_dim, encoder_layer, encoder_head, mask_ratio)
+        self.decoder = MAE_Decoder(image_size, in_channel, patch_size, emb_dim, decoder_layer, decoder_head)
 
     def forward(self, img):
         features, backward_indexes = self.encoder(img)
